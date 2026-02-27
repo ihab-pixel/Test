@@ -106,6 +106,7 @@ def check():
             "status": candidate.get("status"),
             "size": candidate.get("size"),
             "error": candidate.get("error"),
+            "test_url": test_url,
         }
 
     with ThreadPoolExecutor(max_workers=min(len(params), 10)) as executor:

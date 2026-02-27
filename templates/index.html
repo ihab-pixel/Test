@@ -159,6 +159,15 @@
       min-width: 120px;
     }
 
+    .param-link {
+      color: #6366f1;
+      text-decoration: none;
+      font-size: 0.82rem;
+      flex-shrink: 0;
+      transition: color 0.2s;
+    }
+    .param-link:hover { color: #818cf8; }
+
     .badge {
       font-size: 0.72rem;
       font-weight: 700;
@@ -300,7 +309,7 @@
 
         // Parameter rows
         const list = document.getElementById("param-list");
-        data.results.forEach(({ param, verdict, status, size, error }) => {
+        data.results.forEach(({ param, verdict, status, size, error, test_url }) => {
           const meta = error ? "request failed" : `HTTP ${status} · ${fmtBytes(size)}`;
           const div = document.createElement("div");
           div.className = "param-item";
@@ -309,6 +318,7 @@
             <div class="param-name">${escHtml(param)}</div>
             <div class="param-meta">${meta}</div>
             <div class="badge ${verdict}">${verdict === "required" ? "Required" : "Optional"}</div>
+            <a class="param-link" href="${escHtml(test_url)}" target="_blank" rel="noopener" title="Open test URL">&#x2197;</a>
           `;
           list.appendChild(div);
         });

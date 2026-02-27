@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """URL Parameter Checker — Flask web app."""
 
+import hashlib
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,18 +37,95 @@ def visible_text_length(content: bytes) -> int:
     return len(text)
 
 
+def _first(pattern: str, text: str, flags=re.IGNORECASE | re.DOTALL) -> str:
+    m = re.search(pattern, text, flags)
+    return m.group(1).strip() if m else ""
+
+
+def extract_content_fingerprint(html: str) -> dict:
+    """Extract server-side content markers that change with URL parameters."""
+
+    # <title>
+    title = _first(r"<title[^>]*>(.*?)</title>", html)
+
+    # <meta name="description"> / og:title / og:description / og:url
+    meta_desc = _first(r'<meta\s[^>]*name=["\']description["\'][^>]*content=["\'](.*?)["\']', html)
+    og_title = _first(r'<meta\s[^>]*property=["\']og:title["\'][^>]*content=["\'](.*?)["\']', html)
+    og_desc = _first(r'<meta\s[^>]*property=["\']og:description["\'][^>]*content=["\'](.*?)["\']', html)
+    og_url = _first(r'<meta\s[^>]*property=["\']og:url["\'][^>]*content=["\'](.*?)["\']', html)
+
+    # <link rel="canonical">
+    canonical = _first(r'<link\s[^>]*rel=["\']canonical["\'][^>]*href=["\'](.*?)["\']', html)
+
+    # JSON-LD blocks (often contain page-specific structured data)
+    jsonld_blocks = re.findall(
+        r'<script\s[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.IGNORECASE | re.DOTALL
+    )
+    jsonld_hash = hashlib.md5("".join(jsonld_blocks).encode()).hexdigest()
+
+    # Next.js / Nuxt / other SPA initial state blobs
+    next_data = _first(r'<script\s[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html)
+    nuxt_data = _first(r'window\.__NUXT__\s*=\s*(\{.*?\})\s*;', html)
+    remix_data = _first(r'window\.__remixContext\s*=\s*(\{.*?\})', html)
+
+    # Apollo / Relay / TanStack initial cache
+    apollo = _first(r'window\.__APOLLO_STATE__\s*=\s*(\{.*?\})', html)
+
+    # Generic __INITIAL_STATE__ pattern used by many frameworks
+    initial_state = _first(r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\})', html)
+
+    return {
+        "title": title,
+        "meta_desc": meta_desc,
+        "og_title": og_title,
+        "og_desc": og_desc,
+        "og_url": og_url,
+        "canonical": canonical,
+        "jsonld_hash": jsonld_hash,
+        "next_data_len": len(next_data),
+        "nuxt_data_len": len(nuxt_data),
+        "remix_data_len": len(remix_data),
+        "apollo_len": len(apollo),
+        "initial_state_len": len(initial_state),
+    }
+
+
 def fetch(url: str) -> dict:
     try:
         r = requests.get(url, timeout=TIMEOUT, allow_redirects=True, headers=HEADERS)
+        content = r.content
+        html = content.decode("utf-8", errors="replace")
         return {
             "ok": True,
             "status": r.status_code,
-            "size": len(r.content),
-            "text_len": visible_text_length(r.content),
+            "size": len(content),
+            "text_len": visible_text_length(content),
             "final_url": r.url,
+            "fingerprint": extract_content_fingerprint(html),
         }
     except requests.RequestException as e:
         return {"ok": False, "error": str(e)}
+
+
+def _fingerprints_differ(fp1: dict, fp2: dict) -> bool:
+    """Return True if any meaningful content marker changed."""
+    # String fields: any non-empty difference counts
+    for key in ("title", "meta_desc", "og_title", "og_desc", "og_url", "canonical", "jsonld_hash"):
+        v1, v2 = fp1.get(key, ""), fp2.get(key, "")
+        if v1 and v2 and v1 != v2:
+            return True
+        # If baseline had content but candidate is empty (or vice versa)
+        if bool(v1) != bool(v2):
+            return True
+    # Numeric length fields: flag if the blob shrinks/grows significantly
+    for key in ("next_data_len", "nuxt_data_len", "remix_data_len", "apollo_len", "initial_state_len"):
+        v1, v2 = fp1.get(key, 0), fp2.get(key, 0)
+        if v1 > 100:  # only care if there was real data
+            ratio = abs(v1 - v2) / v1
+            if ratio > 0.05:
+                return True
+    return False
 
 
 def classify(baseline: dict, candidate: dict) -> str:
@@ -56,6 +135,12 @@ def classify(baseline: dict, candidate: dict) -> str:
         return "required"
     # Redirect to a different URL means the param influenced routing
     if baseline.get("final_url") != candidate.get("final_url"):
+        return "required"
+    # Content fingerprint check (catches JS-heavy SPAs with server-injected data)
+    if _fingerprints_differ(
+        baseline.get("fingerprint", {}),
+        candidate.get("fingerprint", {}),
+    ):
         return "required"
     if baseline["size"] > 0:
         ratio = abs(baseline["size"] - candidate["size"]) / baseline["size"]

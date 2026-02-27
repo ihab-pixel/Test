@@ -2,6 +2,7 @@
 """URL Parameter Checker — Flask web app."""
 
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -27,6 +28,13 @@ def build_url(parsed, params: dict) -> str:
     return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
 
 
+def visible_text_length(content: bytes) -> int:
+    """Return the character count of visible text after stripping HTML tags."""
+    text = re.sub(rb"<[^>]+>", b"", content)
+    text = re.sub(rb"\s+", b" ", text).strip()
+    return len(text)
+
+
 def fetch(url: str) -> dict:
     try:
         r = requests.get(url, timeout=TIMEOUT, allow_redirects=True, headers=HEADERS)
@@ -34,6 +42,7 @@ def fetch(url: str) -> dict:
             "ok": True,
             "status": r.status_code,
             "size": len(r.content),
+            "text_len": visible_text_length(r.content),
             "final_url": r.url,
         }
     except requests.RequestException as e:
@@ -51,6 +60,13 @@ def classify(baseline: dict, candidate: dict) -> str:
     if baseline["size"] > 0:
         ratio = abs(baseline["size"] - candidate["size"]) / baseline["size"]
         if ratio > 0.05:
+            return "required"
+    # Visible text drops sharply on "200 but empty page" responses
+    baseline_tl = baseline.get("text_len", 0)
+    candidate_tl = candidate.get("text_len", 0)
+    if baseline_tl > 200:
+        text_ratio = abs(baseline_tl - candidate_tl) / baseline_tl
+        if text_ratio > 0.20:
             return "required"
     return "optional"
 

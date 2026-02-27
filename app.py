@@ -8,41 +8,65 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+import requests as _requests
 from flask import Flask, jsonify, render_template, request
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
 TIMEOUT_MS = 20_000   # ms — time for page + JS to finish loading
-CHROME_PATH = "/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
+_FALLBACK_HEADERS = {
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 
-# One shared browser instance; protected by a lock during (re)launch only.
+# ---------------------------------------------------------------------------
+# Playwright browser — lazily started, falls back to requests if unavailable
+# ---------------------------------------------------------------------------
 _pw = None
 _browser = None
 _browser_lock = threading.Lock()
+_playwright_ok: bool | None = None   # None = untested
 
 
 def _get_browser():
-    global _pw, _browser
+    """Return a live Playwright browser, or None if Playwright is unavailable."""
+    global _pw, _browser, _playwright_ok
+    if _playwright_ok is False:
+        return None
     with _browser_lock:
-        if _browser is None or not _browser.is_connected():
-            if _pw is not None:
-                try:
-                    _pw.stop()
-                except Exception:
-                    pass
-            _pw = sync_playwright().start()
-            _browser = _pw.chromium.launch(
-                headless=True,
-                executable_path=CHROME_PATH,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-    return _browser
+        if _playwright_ok is False:
+            return None
+        try:
+            if _browser is None or not _browser.is_connected():
+                if _pw is not None:
+                    try:
+                        _pw.stop()
+                    except Exception:
+                        pass
+                from playwright.sync_api import sync_playwright
+                _pw = sync_playwright().start()
+                # Look for a known local dev binary first; otherwise let
+                # Playwright use whatever it installed (e.g. during Vercel build)
+                _local = "/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome"
+                kwargs = dict(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                if os.path.exists(_local):
+                    kwargs["executable_path"] = _local
+                _browser = _pw.chromium.launch(**kwargs)
+            _playwright_ok = True
+            return _browser
+        except Exception as exc:
+            app.logger.warning("Playwright unavailable, falling back to requests: %s", exc)
+            _playwright_ok = False
+            return None
 
 
 def build_url(parsed, params: dict) -> str:
@@ -85,8 +109,14 @@ def extract_content_fingerprint(html: str) -> dict:
 
 
 def fetch(url: str) -> dict:
+    browser = _get_browser()
+    if browser is not None:
+        return _fetch_playwright(url, browser)
+    return _fetch_requests(url)
+
+
+def _fetch_playwright(url: str, browser) -> dict:
     try:
-        browser = _get_browser()
         ctx = browser.new_context(user_agent=UA)
         page = ctx.new_page()
         try:
@@ -96,7 +126,6 @@ def fetch(url: str) -> dict:
             final_url = page.url
         finally:
             ctx.close()
-
         return {
             "ok": True,
             "status": status,
@@ -106,6 +135,23 @@ def fetch(url: str) -> dict:
             "fingerprint": extract_content_fingerprint(html),
         }
     except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _fetch_requests(url: str) -> dict:
+    try:
+        r = _requests.get(url, timeout=TIMEOUT_MS // 1000, allow_redirects=True,
+                          headers=_FALLBACK_HEADERS)
+        html = r.content.decode("utf-8", errors="replace")
+        return {
+            "ok": True,
+            "status": r.status_code,
+            "size": len(r.content),
+            "text_len": visible_text_length(html),
+            "final_url": r.url,
+            "fingerprint": extract_content_fingerprint(html),
+        }
+    except _requests.RequestException as e:
         return {"ok": False, "error": str(e)}
 
 

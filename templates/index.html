@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URL Parameter Checker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 16px 80px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #fff;
+    }
+    header p {
+      margin-top: 8px;
+      color: #94a3b8;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: #1e2130;
+      border: 1px solid #2d3348;
+      border-radius: 14px;
+      padding: 28px;
+      width: 100%;
+      max-width: 720px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+    .input-row input {
+      flex: 1;
+      background: #0f1117;
+      border: 1px solid #2d3348;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.95rem;
+      color: #e2e8f0;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .input-row input:focus { border-color: #6366f1; }
+    .input-row input::placeholder { color: #475569; }
+
+    button {
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 22px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+      white-space: nowrap;
+    }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #results { margin-top: 28px; display: none; }
+
+    .baseline-bar {
+      background: #161926;
+      border: 1px solid #2d3348;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 20px;
+    }
+    .baseline-bar span { color: #e2e8f0; font-weight: 600; }
+
+    .param-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .param-item {
+      background: #161926;
+      border: 1px solid #2d3348;
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      animation: fadeIn 0.25s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .param-name {
+      font-family: "Fira Code", "Cascadia Code", monospace;
+      font-size: 0.9rem;
+      color: #c7d2fe;
+      flex: 1;
+      word-break: break-all;
+    }
+
+    .param-meta {
+      font-size: 0.78rem;
+      color: #64748b;
+      text-align: right;
+      min-width: 120px;
+    }
+
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 20px;
+      min-width: 78px;
+      text-align: center;
+    }
+    .badge.required { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
+    .badge.optional { background: #052e16; color: #4ade80; border: 1px solid #14532d; }
+    .badge.checking {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      animation: pulse 1.2s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid #334155;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #summary {
+      margin-top: 24px;
+      border-top: 1px solid #2d3348;
+      padding-top: 20px;
+      display: none;
+    }
+    #summary h3 { font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+
+    .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .summary-box {
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .summary-box.required-box { background: #1c0a0a; border: 1px solid #7f1d1d; }
+    .summary-box.optional-box { background: #021a0e; border: 1px solid #14532d; }
+    .summary-box h4 { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+    .summary-box.required-box h4 { color: #f87171; }
+    .summary-box.optional-box h4 { color: #4ade80; }
+    .summary-box ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .summary-box li {
+      font-family: "Fira Code", monospace;
+      font-size: 0.85rem;
+      color: #cbd5e1;
+      background: #0f1117;
+      border-radius: 6px;
+      padding: 5px 10px;
+    }
+    .summary-box .empty { font-size: 0.82rem; color: #475569; font-style: italic; }
+
+    #error-msg {
+      display: none;
+      background: #1c0a0a;
+      border: 1px solid #7f1d1d;
+      color: #f87171;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-top: 16px;
+      font-size: 0.88rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>URL Parameter Checker</h1>
+    <p>Find out which query parameters are required and which are optional.</p>
+  </header>
+
+  <div class="card">
+    <div class="input-row">
+      <input id="url-input" type="url"
+        placeholder="https://example.com/search?q=hello&lang=en&page=1" />
+      <button id="check-btn" onclick="runCheck()">Check</button>
+    </div>
+
+    <div id="error-msg"></div>
+
+    <div id="results">
+      <div class="baseline-bar" id="baseline-bar"></div>
+      <div class="param-list" id="param-list"></div>
+      <div id="summary">
+        <h3>Summary</h3>
+        <div class="summary-grid">
+          <div class="summary-box required-box">
+            <h4>Required</h4>
+            <ul id="summary-required"></ul>
+          </div>
+          <div class="summary-box optional-box">
+            <h4>Optional</h4>
+            <ul id="summary-optional"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const items = {};
+
+    function showError(msg) {
+      const el = document.getElementById("error-msg");
+      el.textContent = msg;
+      el.style.display = "block";
+    }
+
+    function clearError() {
+      const el = document.getElementById("error-msg");
+      el.style.display = "none";
+    }
+
+    function fmtBytes(n) {
+      if (n === undefined || n === null) return "—";
+      if (n < 1024) return `${n} B`;
+      return `${(n / 1024).toFixed(1)} KB`;
+    }
+
+    function createParamItem(param) {
+      const div = document.createElement("div");
+      div.className = "param-item";
+      div.id = `param-${CSS.escape(param)}`;
+      div.innerHTML = `
+        <div class="spinner"></div>
+        <div class="param-name">${escHtml(param)}</div>
+        <div class="param-meta" id="meta-${CSS.escape(param)}">checking…</div>
+        <div class="badge checking" id="badge-${CSS.escape(param)}">Checking</div>
+      `;
+      return div;
+    }
+
+    function updateParamItem(param, verdict, status, size, error) {
+      const badge = document.getElementById(`badge-${CSS.escape(param)}`);
+      const meta  = document.getElementById(`meta-${CSS.escape(param)}`);
+      const item  = document.getElementById(`param-${CSS.escape(param)}`);
+
+      // Replace spinner with a plain dot
+      const spinner = item.querySelector(".spinner");
+      if (spinner) {
+        const dot = document.createElement("div");
+        dot.style.cssText = "width:8px;height:8px;border-radius:50%;flex-shrink:0;background:" +
+          (verdict === "required" ? "#f87171" : "#4ade80");
+        spinner.replaceWith(dot);
+      }
+
+      badge.className = `badge ${verdict}`;
+      badge.textContent = verdict === "required" ? "Required" : "Optional";
+
+      if (error) {
+        meta.textContent = "request failed";
+      } else {
+        meta.textContent = `HTTP ${status} · ${fmtBytes(size)}`;
+      }
+    }
+
+    function escHtml(str) {
+      return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    }
+
+    function runCheck() {
+      const url = document.getElementById("url-input").value.trim();
+      if (!url) { showError("Please enter a URL."); return; }
+
+      clearError();
+      document.getElementById("results").style.display = "block";
+      document.getElementById("summary").style.display = "none";
+      document.getElementById("param-list").innerHTML = "";
+      document.getElementById("baseline-bar").textContent = "Making baseline request…";
+      document.getElementById("check-btn").disabled = true;
+
+      const es = new EventSource(`/check?url=${encodeURIComponent(url)}`);
+
+      es.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+
+        if (data.type === "error") {
+          showError(data.message);
+          es.close();
+          document.getElementById("check-btn").disabled = false;
+          return;
+        }
+
+        if (data.type === "start") {
+          const list = document.getElementById("param-list");
+          data.params.forEach(p => {
+            list.appendChild(createParamItem(p));
+          });
+        }
+
+        if (data.type === "baseline") {
+          document.getElementById("baseline-bar").innerHTML =
+            `Baseline &mdash; HTTP <span>${data.status}</span> · <span>${fmtBytes(data.size)}</span>`;
+        }
+
+        if (data.type === "result") {
+          updateParamItem(data.param, data.verdict, data.status, data.size, data.error);
+        }
+
+        if (data.type === "done") {
+          es.close();
+          document.getElementById("check-btn").disabled = false;
+
+          const sumReq = document.getElementById("summary-required");
+          const sumOpt = document.getElementById("summary-optional");
+          sumReq.innerHTML = data.required.length
+            ? data.required.map(p => `<li>${escHtml(p)}</li>`).join("")
+            : `<li class="empty">none</li>`;
+          sumOpt.innerHTML = data.optional.length
+            ? data.optional.map(p => `<li>${escHtml(p)}</li>`).join("")
+            : `<li class="empty">none</li>`;
+
+          document.getElementById("summary").style.display = "block";
+        }
+      };
+
+      es.onerror = () => {
+        showError("Connection lost. Please try again.");
+        es.close();
+        document.getElementById("check-btn").disabled = false;
+      };
+    }
+
+    document.getElementById("url-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runCheck();
+    });
+  </script>
+</body>
+</html>

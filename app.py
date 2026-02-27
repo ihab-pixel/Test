@@ -12,6 +12,16 @@ app = Flask(__name__)
 
 TIMEOUT = 8
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
 
 def build_url(parsed, params: dict) -> str:
     return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
@@ -19,8 +29,13 @@ def build_url(parsed, params: dict) -> str:
 
 def fetch(url: str) -> dict:
     try:
-        r = requests.get(url, timeout=TIMEOUT, allow_redirects=True)
-        return {"ok": True, "status": r.status_code, "size": len(r.content)}
+        r = requests.get(url, timeout=TIMEOUT, allow_redirects=True, headers=HEADERS)
+        return {
+            "ok": True,
+            "status": r.status_code,
+            "size": len(r.content),
+            "final_url": r.url,
+        }
     except requests.RequestException as e:
         return {"ok": False, "error": str(e)}
 
@@ -30,9 +45,12 @@ def classify(baseline: dict, candidate: dict) -> str:
         return "required"
     if baseline["status"] != candidate["status"]:
         return "required"
+    # Redirect to a different URL means the param influenced routing
+    if baseline.get("final_url") != candidate.get("final_url"):
+        return "required"
     if baseline["size"] > 0:
         ratio = abs(baseline["size"] - candidate["size"]) / baseline["size"]
-        if ratio > 0.10:
+        if ratio > 0.05:
             return "required"
     return "optional"
 

@@ -2,14 +2,15 @@
 """URL Parameter Checker — Flask web app."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-TIMEOUT = 10
+TIMEOUT = 8
 
 
 def build_url(parsed, params: dict) -> str:
@@ -60,19 +61,25 @@ def check():
     if not baseline["ok"]:
         return jsonify({"error": f"Baseline request failed: {baseline.get('error')}"}), 502
 
-    results = []
-    for param in params:
+    def check_param(param):
         reduced = {k: v for k, v in params.items() if k != param}
         test_url = build_url(parsed, reduced)
         candidate = fetch(test_url)
         verdict = classify(baseline, candidate)
-        results.append({
+        return {
             "param": param,
             "verdict": verdict,
             "status": candidate.get("status"),
             "size": candidate.get("size"),
             "error": candidate.get("error"),
-        })
+        }
+
+    with ThreadPoolExecutor(max_workers=min(len(params), 10)) as executor:
+        futures = {executor.submit(check_param, p): p for p in params}
+        raw = {f.result()["param"]: f.result() for f in as_completed(futures)}
+
+    # preserve original param order
+    results = [raw[p] for p in params]
 
     required = [r["param"] for r in results if r["verdict"] == "required"]
     optional = [r["param"] for r in results if r["verdict"] == "optional"]

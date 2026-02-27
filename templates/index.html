@@ -76,6 +76,25 @@
     button:hover { background: #4f46e5; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    #loading {
+      display: none;
+      margin-top: 24px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 0.9rem;
+    }
+    .loader {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid #334155;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     #results { margin-top: 28px; display: none; }
 
     .baseline-bar {
@@ -99,9 +118,26 @@
       display: flex;
       align-items: center;
       gap: 14px;
-      animation: fadeIn 0.25s ease;
+      animation: fadeIn 0.2s ease both;
     }
+    .param-item:nth-child(1)  { animation-delay: 0.00s; }
+    .param-item:nth-child(2)  { animation-delay: 0.05s; }
+    .param-item:nth-child(3)  { animation-delay: 0.10s; }
+    .param-item:nth-child(4)  { animation-delay: 0.15s; }
+    .param-item:nth-child(5)  { animation-delay: 0.20s; }
+    .param-item:nth-child(6)  { animation-delay: 0.25s; }
+    .param-item:nth-child(7)  { animation-delay: 0.30s; }
+    .param-item:nth-child(8)  { animation-delay: 0.35s; }
+
     @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.required { background: #f87171; }
+    .dot.optional { background: #4ade80; }
 
     .param-name {
       font-family: "Fira Code", "Cascadia Code", monospace;
@@ -130,29 +166,11 @@
     }
     .badge.required { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
     .badge.optional { background: #052e16; color: #4ade80; border: 1px solid #14532d; }
-    .badge.checking {
-      background: #1e293b;
-      color: #94a3b8;
-      border: 1px solid #334155;
-      animation: pulse 1.2s infinite;
-    }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
-
-    .spinner {
-      width: 14px; height: 14px;
-      border: 2px solid #334155;
-      border-top-color: #6366f1;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      flex-shrink: 0;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
 
     #summary {
       margin-top: 24px;
       border-top: 1px solid #2d3348;
       padding-top: 20px;
-      display: none;
     }
     #summary h3 { font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
 
@@ -204,6 +222,11 @@
 
     <div id="error-msg"></div>
 
+    <div id="loading">
+      <span class="loader"></span>
+      <span id="loading-text">Checking parameters…</span>
+    </div>
+
     <div id="results">
       <div class="baseline-bar" id="baseline-bar"></div>
       <div class="param-list" id="param-list"></div>
@@ -224,127 +247,84 @@
   </div>
 
   <script>
-    const items = {};
-
     function showError(msg) {
       const el = document.getElementById("error-msg");
       el.textContent = msg;
       el.style.display = "block";
     }
-
     function clearError() {
-      const el = document.getElementById("error-msg");
-      el.style.display = "none";
+      document.getElementById("error-msg").style.display = "none";
     }
-
     function fmtBytes(n) {
-      if (n === undefined || n === null) return "—";
-      if (n < 1024) return `${n} B`;
-      return `${(n / 1024).toFixed(1)} KB`;
+      if (n == null) return "—";
+      return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
     }
-
-    function createParamItem(param) {
-      const div = document.createElement("div");
-      div.className = "param-item";
-      div.id = `param-${CSS.escape(param)}`;
-      div.innerHTML = `
-        <div class="spinner"></div>
-        <div class="param-name">${escHtml(param)}</div>
-        <div class="param-meta" id="meta-${CSS.escape(param)}">checking…</div>
-        <div class="badge checking" id="badge-${CSS.escape(param)}">Checking</div>
-      `;
-      return div;
-    }
-
-    function updateParamItem(param, verdict, status, size, error) {
-      const badge = document.getElementById(`badge-${CSS.escape(param)}`);
-      const meta  = document.getElementById(`meta-${CSS.escape(param)}`);
-      const item  = document.getElementById(`param-${CSS.escape(param)}`);
-
-      // Replace spinner with a plain dot
-      const spinner = item.querySelector(".spinner");
-      if (spinner) {
-        const dot = document.createElement("div");
-        dot.style.cssText = "width:8px;height:8px;border-radius:50%;flex-shrink:0;background:" +
-          (verdict === "required" ? "#f87171" : "#4ade80");
-        spinner.replaceWith(dot);
-      }
-
-      badge.className = `badge ${verdict}`;
-      badge.textContent = verdict === "required" ? "Required" : "Optional";
-
-      if (error) {
-        meta.textContent = "request failed";
-      } else {
-        meta.textContent = `HTTP ${status} · ${fmtBytes(size)}`;
-      }
-    }
-
     function escHtml(str) {
       return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     }
 
-    function runCheck() {
+    async function runCheck() {
       const url = document.getElementById("url-input").value.trim();
       if (!url) { showError("Please enter a URL."); return; }
 
       clearError();
-      document.getElementById("results").style.display = "block";
-      document.getElementById("summary").style.display = "none";
+      document.getElementById("results").style.display = "none";
       document.getElementById("param-list").innerHTML = "";
-      document.getElementById("baseline-bar").textContent = "Making baseline request…";
       document.getElementById("check-btn").disabled = true;
+      document.getElementById("loading").style.display = "block";
+      document.getElementById("loading-text").textContent = "Checking parameters…";
 
-      const es = new EventSource(`/check?url=${encodeURIComponent(url)}`);
+      try {
+        const res = await fetch("/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
 
-      es.onmessage = (e) => {
-        const data = JSON.parse(e.data);
+        const data = await res.json();
 
-        if (data.type === "error") {
-          showError(data.message);
-          es.close();
-          document.getElementById("check-btn").disabled = false;
+        if (!res.ok) {
+          showError(data.error || "Something went wrong.");
           return;
         }
 
-        if (data.type === "start") {
-          const list = document.getElementById("param-list");
-          data.params.forEach(p => {
-            list.appendChild(createParamItem(p));
-          });
-        }
+        // Baseline bar
+        document.getElementById("baseline-bar").innerHTML =
+          `Baseline &mdash; HTTP <span>${data.baseline.status}</span> · <span>${fmtBytes(data.baseline.size)}</span>`;
 
-        if (data.type === "baseline") {
-          document.getElementById("baseline-bar").innerHTML =
-            `Baseline &mdash; HTTP <span>${data.status}</span> · <span>${fmtBytes(data.size)}</span>`;
-        }
+        // Parameter rows
+        const list = document.getElementById("param-list");
+        data.results.forEach(({ param, verdict, status, size, error }) => {
+          const meta = error ? "request failed" : `HTTP ${status} · ${fmtBytes(size)}`;
+          const div = document.createElement("div");
+          div.className = "param-item";
+          div.innerHTML = `
+            <div class="dot ${verdict}"></div>
+            <div class="param-name">${escHtml(param)}</div>
+            <div class="param-meta">${meta}</div>
+            <div class="badge ${verdict}">${verdict === "required" ? "Required" : "Optional"}</div>
+          `;
+          list.appendChild(div);
+        });
 
-        if (data.type === "result") {
-          updateParamItem(data.param, data.verdict, data.status, data.size, data.error);
-        }
+        // Summary
+        const sumReq = document.getElementById("summary-required");
+        const sumOpt = document.getElementById("summary-optional");
+        sumReq.innerHTML = data.required.length
+          ? data.required.map(p => `<li>${escHtml(p)}</li>`).join("")
+          : `<li class="empty">none</li>`;
+        sumOpt.innerHTML = data.optional.length
+          ? data.optional.map(p => `<li>${escHtml(p)}</li>`).join("")
+          : `<li class="empty">none</li>`;
 
-        if (data.type === "done") {
-          es.close();
-          document.getElementById("check-btn").disabled = false;
+        document.getElementById("results").style.display = "block";
 
-          const sumReq = document.getElementById("summary-required");
-          const sumOpt = document.getElementById("summary-optional");
-          sumReq.innerHTML = data.required.length
-            ? data.required.map(p => `<li>${escHtml(p)}</li>`).join("")
-            : `<li class="empty">none</li>`;
-          sumOpt.innerHTML = data.optional.length
-            ? data.optional.map(p => `<li>${escHtml(p)}</li>`).join("")
-            : `<li class="empty">none</li>`;
-
-          document.getElementById("summary").style.display = "block";
-        }
-      };
-
-      es.onerror = () => {
-        showError("Connection lost. Please try again.");
-        es.close();
+      } catch (e) {
+        showError("Network error. Please try again.");
+      } finally {
+        document.getElementById("loading").style.display = "none";
         document.getElementById("check-btn").disabled = false;
-      };
+      }
     }
 
     document.getElementById("url-input").addEventListener("keydown", (e) => {

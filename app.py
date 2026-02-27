@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """URL Parameter Checker — Flask web app."""
 
-import json
-import time
+import os
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
-from flask import Flask, Response, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, render_template, request
 
 app = Flask(__name__)
 
 TIMEOUT = 10
-DELAY = 0.4
 
 
 def build_url(parsed, params: dict) -> str:
@@ -38,68 +36,54 @@ def classify(baseline: dict, candidate: dict) -> str:
     return "optional"
 
 
-def event(data: dict) -> str:
-    return f"data: {json.dumps(data)}\n\n"
-
-
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
-@app.route("/check")
+@app.route("/check", methods=["POST"])
 def check():
-    url = request.args.get("url", "").strip()
+    body = request.get_json(silent=True) or {}
+    url = (body.get("url") or "").strip()
 
-    def generate():
-        if not url.startswith(("http://", "https://")):
-            yield event({"type": "error", "message": "URL must start with http:// or https://"})
-            return
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"error": "URL must start with http:// or https://"}), 400
 
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query, keep_blank_values=True)
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
 
-        if not params:
-            yield event({"type": "error", "message": "No query parameters found in the URL."})
-            return
+    if not params:
+        return jsonify({"error": "No query parameters found in the URL."}), 400
 
-        yield event({"type": "start", "param_count": len(params), "params": list(params.keys())})
+    baseline_url = build_url(parsed, params)
+    baseline = fetch(baseline_url)
+    if not baseline["ok"]:
+        return jsonify({"error": f"Baseline request failed: {baseline.get('error')}"}), 502
 
-        # Baseline
-        baseline_url = build_url(parsed, params)
-        baseline = fetch(baseline_url)
-        if not baseline["ok"]:
-            yield event({"type": "error", "message": f"Baseline request failed: {baseline.get('error')}"})
-            return
+    results = []
+    for param in params:
+        reduced = {k: v for k, v in params.items() if k != param}
+        test_url = build_url(parsed, reduced)
+        candidate = fetch(test_url)
+        verdict = classify(baseline, candidate)
+        results.append({
+            "param": param,
+            "verdict": verdict,
+            "status": candidate.get("status"),
+            "size": candidate.get("size"),
+            "error": candidate.get("error"),
+        })
 
-        yield event({"type": "baseline", "status": baseline["status"], "size": baseline["size"]})
+    required = [r["param"] for r in results if r["verdict"] == "required"]
+    optional = [r["param"] for r in results if r["verdict"] == "optional"]
 
-        results = {}
-        for param in params:
-            reduced = {k: v for k, v in params.items() if k != param}
-            test_url = build_url(parsed, reduced)
-            candidate = fetch(test_url)
-            verdict = classify(baseline, candidate)
-            results[param] = verdict
-
-            yield event({
-                "type": "result",
-                "param": param,
-                "verdict": verdict,
-                "status": candidate.get("status"),
-                "size": candidate.get("size"),
-                "error": candidate.get("error"),
-            })
-
-            time.sleep(DELAY)
-
-        required = [p for p, v in results.items() if v == "required"]
-        optional = [p for p, v in results.items() if v == "optional"]
-        yield event({"type": "done", "required": required, "optional": optional})
-
-    return Response(stream_with_context(generate()), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return jsonify({
+        "baseline": {"status": baseline["status"], "size": baseline["size"]},
+        "results": results,
+        "required": required,
+        "optional": optional,
+    })
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
